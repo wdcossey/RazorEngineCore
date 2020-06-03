@@ -119,7 +119,7 @@ namespace RazorEngineCore
         {
             if (model?.IsAnonymous() == true)
             {
-                return RunAsync((object)model).GetAwaiter().GetResult();
+                return await RunAsync((object)model);
             }
             
             IRazorEngineTemplate instance = (IRazorEngineTemplate)Activator.CreateInstance(this.TemplateType);
