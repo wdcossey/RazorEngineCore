@@ -1,4 +1,12 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Reflection;
 using System.Threading.Tasks;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.Emit;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using RazorEngineCore.Tests.Models;
 
@@ -452,6 +460,73 @@ void RecursionTest(int level)
                 });
             });
 
+            Assert.AreEqual(expected, actual);
+        }
+
+        [TestMethod]
+        public async Task TestCompileAndRun_MetadataReference()
+        {
+            string greetingClass = @"
+namespace TestAssembly
+{
+    public static class Greeting
+    {
+        public static string GetGreeting(string name)
+        {
+            return ""Hello, "" + name + ""!"";
+        }
+    }
+}
+";
+            // This needs to be done in the builder to have access to all of the assemblies added through
+            // the various AddAssemblyReference options
+            CSharpCompilation compilation = CSharpCompilation.Create(
+                    "TestAssembly",
+                    new[]
+                    {
+                            CSharpSyntaxTree.ParseText(greetingClass)
+                    },
+                    new List<MetadataReference>()
+                    {
+                            MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
+                            MetadataReference.CreateFromFile(Assembly.Load(new AssemblyName("Microsoft.CSharp")).Location),
+                            MetadataReference.CreateFromFile(Assembly.Load(new AssemblyName("netstandard")).Location),
+                            MetadataReference.CreateFromFile(Assembly.Load(new AssemblyName("System.Runtime")).Location)
+                    },
+                    new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+            );
+
+            MemoryStream memoryStream = new MemoryStream();
+            EmitResult emitResult = compilation.Emit(memoryStream);
+
+            if (!emitResult.Success)
+            {
+                Assert.Fail("Unable to compile test assembly");
+            }
+
+            memoryStream.Position = 0;
+
+            // Add an assembly resolver so the assembly can be found
+            AppDomain.CurrentDomain.AssemblyResolve += (sender, eventArgs) =>
+                    new AssemblyName(eventArgs.Name ?? string.Empty).Name == "TestAssembly"
+                            ? Assembly.Load(memoryStream.ToArray())
+                            : null;
+
+            RazorEngine razorEngine = new RazorEngine();
+            IRazorEngineCompiledTemplate template = await razorEngine.CompileAsync(@"
+@using TestAssembly
+<p>@Greeting.GetGreeting(""Name"")</p>
+", builder =>
+            {
+                builder.AddMetadataReference(MetadataReference.CreateFromStream(memoryStream));
+
+            });
+
+            string expected = @"
+<p>Hello, Name!</p>
+";
+            string actual = await template.RunAsync();
+            
             Assert.AreEqual(expected, actual);
         }
     }
